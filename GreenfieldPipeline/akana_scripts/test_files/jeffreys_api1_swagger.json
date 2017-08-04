@@ -1,0 +1,43 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "title": "jeffreys_api1_v1_live",
+        "description": "jeffreys_api1_v1_live",
+        "version": "0.0.0"
+    },
+    "host": "apigateway.pp.tvlport.com:443",
+    "basePath": "/api10408live",
+    "schemes": [
+        "https",
+        "https",
+        "https"
+    ],
+    "paths": {
+        "/{path:.+|}": {
+            "get": {
+                "operationId": "Default_Operation",
+                "consumes": [
+                    "*/*"
+                ],
+                "produces": [
+                    "*/*"
+                ],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "path",
+                        "type": "string",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "successful operation",
+                        "schema": {}
+                    }
+                },
+                "deprecated": false
+            }
+        }
+    }
+}

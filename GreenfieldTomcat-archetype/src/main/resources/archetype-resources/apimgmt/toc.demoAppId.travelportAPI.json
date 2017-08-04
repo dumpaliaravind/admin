@@ -1,0 +1,14 @@
+{
+  "toc": [
+    "sample_file_1.txt",
+    "sample_file_2.txt"
+  ],
+  "sequence": [
+    "sample_file_1.txt",
+    "sample_file_2.txt"
+  ],
+  "displayNames": {
+    "sample_file_1.txt": "Sample File 1",
+    "sample_file_2.txt": "Sample File 2"
+  }
+}

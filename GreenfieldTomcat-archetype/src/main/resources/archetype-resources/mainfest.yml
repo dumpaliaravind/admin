@@ -1,0 +1,20 @@
+#set( $symbol_pound = '#' )
+#set( $symbol_dollar = '$' )
+#set( $symbol_escape = '\' )
+--- 
+applications:
+- name: ${artifactId}-int
+  memory: 1024M
+  path: target/${artifactId}.war
+  buildpack: https://github.com/cloudfoundry/java-buildpack.git
+  timeout: 180
+  instances: 2
+  services:
+   - appdynamics_${name}
+   - ${artifactId}-svc-config-${name}
+   - ${artifactId}-svc-${name}
+   - config-repo
+  env:
+    JBP_CONFIG_TOMCAT: '[tomcat: { version: 8.0.+ }]'
+    JBP_CONFIG_DYNA_TRACE_AGENT: '[ version: 6.3.0_+ ]'
+    JBP_CONFIG_OPEN_JDK_JRE: '[jre: { version: 1.8.0_+ }]'

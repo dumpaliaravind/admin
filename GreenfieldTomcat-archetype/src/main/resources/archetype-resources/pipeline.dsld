@@ -1,0 +1,206 @@
+node('gf-slave') {
+    def mvnHome = tool 'Maven_3_2_5'
+    env.JAVA_HOME="${tool 'JDK_7u80'}"
+    env.PATH="${env.JAVA_HOME}/bin:${mvnHome}/bin:${env.PATH}"
+    env.MAVEN_OPTS="-Xmx2048m -XX:MaxPermSize=512m"
+	
+    sh "git config --global http.sslVerify 'false'"
+    def Greenfield = fileLoader.fromGit('GreenfieldPipeline/GreenfieldPipeline', 'https://gitbucket.tvlport.com/git/GREENFIELD/GreenfieldAdmin.git', 'master', null, '')
+ 
+    stage 'Checkout'
+    sh "git config --global http.sslVerify 'false'"
+    Greenfield.git_checkout '<URL to Your Git Repository>', Current_Build, true  
+ 
+    stage 'Document Check'
+    Greenfield.checkdocs '<URL Your Data Center Documentation in Sharepoint>'
+    
+    stage 'Maven Build'
+	wrap([$class: 'ConfigFileBuildWrapper', managedFiles: [[fileId: 'org.jenkinsci.plugins.configfiles.maven.MavenSettingsConfig1448996998298', targetLocation: 'settings.xml', variable: '']]]) {
+        stage 'Compile UnitTest'
+	    // Complete a clean compile and unit test of my application
+        sh "mvn -U -s settings.xml clean compile test"
+	
+        stage 'Nexus Jar Publish'
+		// Push a Jar file of my application to Nexus
+        sh "mvn -U -s settings.xml -Pjarmaker deploy -DskipTests"
+	
+        stage 'Nexus War Publish'
+		// Push a War file of my application to Nexus
+        sh "mvn -U -s settings.xml -Pwebapp deploy -DskipTests"
+	        
+        stage 'Sonar'
+        Greenfield.sonar()
+	      
+        stage 'Fortify Scan'
+        Greenfield.fortify_scan()
+    }
+ 
+    stage 'Integration Testing'
+	Greenfield.stackato_login "https://api.stackato.tvlport.com","<Your Org>", "NonProd"
+	try {
+		// Allow Access to App Dynamics for Application
+		String AppDVersion = Greenfield.appdynamics_setup("<Your Service>")
+	    
+		// Allow Access to Config Repo for Zookeeper
+		Greenfield.config_repo_nonprod_setup()
+		
+		// Green Echo Application - Allow Access to Proxy Servers
+		Greenfield.dvproxy_setup()
+	
+		// Create an application User Provided Service to support someone else calling this service from inside Cloud Foundry
+        Greenfield.stackato "create-service user-provided <Your Service>-svc-int --credentials hostname:<Your Service>-int.stackato.tvlport.com --credentials host:<Your Service>-int.stackato.tvlport.com --credentials port:80 --credentials password:''"
+			
+        // Create an application User Provided Service to support holding my application configurations via VCAPs (until Zookeeper support this feature)
+		Greenfield.stackato "create-service user-provided <Your Service>-svc-config-int --credentials hostname:'' --credentials port:'' --credentials password:''"
+			
+		// Push my Application as an "integration" instance
+        Greenfield.stackato "push -n --as <Your Service>-int"
+			
+		// Create an application route to support F5 Access
+		Greenfield.stackato "map <Your Service>-int <Your Service>-int.stackato.tvlport.com"
+		
+        // Add AppD Configuration
+		Greenfield.stackato "env-add <Your Service>-int JBP_CONFIG_APP_DYNAMICS_AGENT '[ version: 4.1.7_+ ]'"
+				
+		// Bind my service to my desired AppD Endpoint E.g. appdynamicsDV_{{appDSvcName}}, appdynamicsPF_{{appDSvcName}}, appdynamicsPP_{{appDSvcName}}, or appdynamicsPN_{{appDSvcName}}
+		Greenfield.stackato "bind-service appdynamicsDV_<Your Service> <Your Service>-int"
+			
+		// Bind my service to my Configurations (via the User Provided Service above)
+        Greenfield.stackato "bind-service <Your Service>-svc-config-int <Your Service>-int"
+			
+		// Bind my service to open IPTable (via the User Provided Service above) - NOT NORMAL - FOR SECURITY TEST ONLY
+		Greenfield.stackato "bind-service <Your Service>-svc-int <Your Service>-int"
+			
+		// Bind my service to dv-outbound-proxy
+		Greenfield.stackato "bind-service dv-outbound-proxy <Your Service>-int"
+ 
+		// Bind my service to config-repo
+		Greenfield.stackato "bind-service config-repo <Your Service>-int"
+ 
+	} finally {
+	    Greenfield.stackato_logout()
+    }
+ 
+    def Regions = Greenfield.getRegions()
+    env.https_proxy="https://atlproxy.tvlport.com:8080/"
+ 
+    for(currentRegion in Regions){ 	
+        stage 'Production Load First Service'
+            Greenfield.stackato_login "https://$currentRegion.CLUSTER", "<Your Org>", "Prod"
+            try {			
+				// Allow Access to App Dynamics for Application
+		        env.JBP_CONFIG_APP_DYNAMICS_AGENT = Greenfield.appdynamics_setup("<Your Service>")
+			
+				// Allow Access to Config Repo for Zookeeper
+				Greenfield.config_repo_nonprod_setup()
+				
+				// Green Echo Application - Allow Access to Proxy Servers
+				Greenfield.dvproxy_setup()
+ 
+               	// Create an application User Provided Service to support someone else calling this service from inside Cloud Foundry
+                Greenfield.stackato "create-service user-provided <Your Service>-svc-build1 --credentials hostname:<Your Service>-int.stackato.tvlport.com --credentials host:<Your Service>-int.stackato.tvlport.com --credentials port:80 --credentials password:''"
+	
+                // Create an application User Provided Service to support holding my application configurations via VCAPs (until Zookeeper support this feature)
+				Greenfield.stackato "create-service user-provided <Your Service>-svc-config-build1 --credentials hostname:'' --credentials port:'' --credentials password:''"
+ 
+                // Push my Application as an "integration" instance
+                Greenfield.stackato "push -n --as <Your Service>-$currentRegion.REGION_NAME-build1"
+ 
+                // Create an application route to support F5 Access
+				Greenfield.stackato "map <Your Service>-$currentRegion.REGION_NAME-build1 <Your Service>.$currentRegion.DOMAIN"
+				
+				// Add AppD Configuration
+		        Greenfield.stackato "env-add <Your Service>-$currentRegion.REGION_NAME-build1 JBP_CONFIG_APP_DYNAMICS_AGENT '[ version: 4.1.7_+ ]'"
+                
+                // Bind my service to my desired AppD Endpoint E.g. appdynamicsDV_{{appDSvcName}}, appdynamicsPF_{{appDSvcName}}, appdynamicsPP_{{appDSvcName}}, or appdynamicsPN_{{appDSvcName}}
+				Greenfield.stackato "bind-service appdynamicsPN_<Your Service> <Your Service>-$currentRegion.REGION_NAME-build1"
+				
+				// Bind my service to my Configurations (via the User Provided Service above)
+                Greenfield.stackato "bind-service <Your Service>-svc-config-build1 <Your Service>-$currentRegion.REGION_NAME-build1"
+				
+				// Bind my service to open IPTable (via the User Provided Service above) - NOT NORMAL - FOR SECURITY TEST ONLY
+				Greenfield.stackato "bind-service <Your Service>-svc-build1 <Your Service>-$currentRegion.REGION_NAME-build1"
+				
+				// Bind my service to dv-outbound-proxy
+				Greenfield.stackato "bind-service dv-outbound-proxy <Your Service>-$currentRegion.REGION_NAME-build1"
+	
+				// Bind my service to config-repo
+				Greenfield.stackato "bind-service config-repo <Your Service>-$currentRegion.REGION_NAME-build1"
+ 
+            }             
+            catch (Exception e){
+                println "Push Failed"
+                currentBuild.result = 'FAILURE'
+            }
+            finally {
+                Greenfield.stackato_logout()
+            }
+	
+	    stage 'Production Load Second Service'
+            Greenfield.stackato_login "https://$currentRegion.CLUSTER", "<Your Org>", "Prod"
+            try {
+				// Allow Access to App Dynamics for Application
+				Greenfield.appdynamics_setup("<Your Service>")
+			
+				// Allow Access to Config Repo for Zookeeper
+				Greenfield.config_repo_nonprod_setup()
+				
+				// Green Echo Application - Allow Access to Proxy Servers
+				Greenfield.dvproxy_setup()
+		
+				// Green DP reporting service
+				Greenfield.stackato "create-service user-provided testdb-connection-build2 --credentials hostname:shlgnrhds003.tvlport.net --credentials port:3306 --credentials password:'' --credentials pass:uaZVC8HQC5vtKfUEBemy --credentials user:perfreporting --credentials database:perfreporting"
+		
+				// MQ Services
+				Greenfield.stackato "create-service user-provided greenfield-mq-build2 --credentials port:'1416' --credentials host:'otpaqg01.dvqa1.tvlport.com' --credentials queuemanager:'OTPAQG01' --credentials channel:'GREENFIELD.SVRCONN' --credentials queue:'GREENFIELD.TEST.IN' --credentials expiry:'120000'"
+				
+				// Create an application User Provided Service to support someone else calling this service from inside Cloud Foundry
+                Greenfield.stackato "create-service user-provided <Your Service>-svc-build2 --credentials hostname:<Your Service>-int.stackato.tvlport.com --credentials host:<Your Service>-int.stackato.tvlport.com --credentials port:80 --credentials password:''"
+					
+                // Create an application User Provided Service to support holding my application configurations via VCAPs (until Zookeeper support this feature)
+				Greenfield.stackato "create-service user-provided <Your Service>-svc-config-build2 --credentials hostname:'' --credentials port:'' --credentials password:''"
+		
+                // Push my Application as an "integration" instance
+                Greenfield.stackato "push -n --no-start --as <Your Service>-$currentRegion.REGION_NAME-build2"
+				
+                // Create an application route to support a cloud to cloud service test that uses a present - or not present User Provided Service
+				Greenfield.stackato "map <Your Service>-$currentRegion.REGION_NAME-build2 <Your Service>-db.$currentRegion.DOMAIN"
+			
+                // Create an application route to support F5 Access
+				Greenfield.stackato "map <Your Service>-$currentRegion.REGION_NAME-build2 <Your Service>.$currentRegion.DOMAIN"
+				
+				// Add AppD Configuration
+		        Greenfield.stackato "env-add <Your Service>-$currentRegion.REGION_NAME-build2 JBP_CONFIG_APP_DYNAMICS_AGENT '[ version: 4.1.7_+ ]'"
+ 
+                // Bind my service to my desired AppD Endpoint E.g. appdynamicsDV_{{appDSvcName}}, appdynamicsPF_{{appDSvcName}}, appdynamicsPP_{{appDSvcName}}, or appdynamicsPN_{{appDSvcName}}
+				Greenfield.stackato "bind-service appdynamicsPN_<Your Service> <Your Service>-$currentRegion.REGION_NAME-build2"
+				
+				// Bind my service to my Configurations (via the User Provided Service above)
+				Greenfield.stackato "bind-service <Your Service>-svc-config-build2 <Your Service>-$currentRegion.REGION_NAME-build2"
+				
+				// Bind my service to open IPTable (via the User Provided Service above) - NOT NORMAL - FOR SECURITY TEST ONLY
+				Greenfield.stackato "bind-service <Your Service>-svc-build2 <Your Service>-$currentRegion.REGION_NAME-build2"
+				
+				// Bind my service to dv-outbound-proxy
+				Greenfield.stackato "bind-service dv-outbound-proxy <Your Service>-$currentRegion.REGION_NAME-build2"
+	
+				// Bind my service to config-repo
+				Greenfield.stackato "bind-service config-repo <Your Service>-$currentRegion.REGION_NAME-build2"
+ 
+                // Start Build2
+                Greenfield.stackato "start <Your Service>-$currentRegion.REGION_NAME-build2"
+ 
+                // unMap the First Service
+				Greenfield.stackato "unmap <Your Service>-$currentRegion.REGION_NAME-build1 <Your Service>.$currentRegion.DOMAIN"
+ 
+			}
+			catch (Exception e){
+				println "Push Failed"
+				currentBuild.result = 'FAILURE'
+			}
+			finally {
+				Greenfield.stackato_logout()
+			}
+ 
+    } // end of for Regions
+}
